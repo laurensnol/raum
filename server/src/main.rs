@@ -1,9 +1,11 @@
 use std::{
     net::{TcpListener, TcpStream, SocketAddr},
-    sync::mpsc,
+    sync::mpsc::{self, Sender},
     thread,
     io::{Read, ErrorKind, Write},
 };
+
+const BUF_SIZE: usize = 1024;
 
 struct Message {
     sender: SocketAddr,
@@ -11,7 +13,8 @@ struct Message {
 }
 
 fn main() {
-    const BUF_SIZE: usize = 1024;
+    // TODO: Remove client after disconnect
+    // TODO: Unit tests
 
     let host = std::env::args()
         .nth(1)
@@ -39,35 +42,7 @@ fn main() {
                 .expect("Failed to clone socket."));
 
             let tx = tx.clone();
-            thread::spawn(move || loop {
-                let mut buf = vec![0; BUF_SIZE];
-                match sock.read_exact(&mut buf) {
-                    Ok(_) => {
-                        let content = buf
-                            .into_iter()
-                            .take_while(|&x| x != 0)
-                            .collect::<Vec<_>>();
-
-                        let content = String::from_utf8(content)
-                            .expect("Failed to convert message.");
-
-                        println!("Client {addr} sent message: {}", content.trim());
-
-                        let msg = Message { 
-                            sender: addr,
-                            content 
-                        };
-
-                        tx.send(msg)
-                            .expect("Failed to send to mpsc channel.");
-                    },
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => (),
-                    Err(_) => {
-                        eprintln!("Client {addr} disconnected.");
-                        break;
-                    },
-                }
-            });
+            thread::spawn(move || handle_incoming(&mut sock, &addr, &tx));
         }
 
         if let Ok(msg) = rx.try_recv() {
@@ -88,6 +63,38 @@ fn main() {
                         .expect("Failed to write to stream.");
                 }
             }
+        }
+    }
+}
+
+fn handle_incoming(sock: &mut TcpStream, addr: &SocketAddr, tx: &Sender<Message>) {
+    loop {
+        let mut buf = vec![0; BUF_SIZE];
+        match sock.read_exact(&mut buf) {
+            Ok(_) => {
+                let content = buf
+                    .into_iter()
+                    .take_while(|&x| x != 0)
+                    .collect::<Vec<_>>();
+
+                let content = String::from_utf8(content)
+                    .expect("Failed to convert message.");
+
+                println!("Client {addr} sent message: {}", content.trim());
+
+                let msg = Message { 
+                    sender: *addr,
+                    content 
+                };
+
+                tx.send(msg)
+                    .expect("Failed to send to mpsc channel.");
+            },
+            Err(e) if e.kind() == ErrorKind::WouldBlock => (),
+            Err(_) => {
+                eprintln!("Client {addr} disconnected.");
+                break;
+            },
         }
     }
 }
